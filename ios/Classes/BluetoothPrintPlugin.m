@@ -267,55 +267,34 @@
         }else if([@"image" isEqualToString:type]){
             NSData *decodeData = [[NSData alloc] initWithBase64EncodedString:content options:0];
             UIImage *image = [UIImage imageWithData:decodeData];
-            
-            const int maxWidth = 400;
-            const int maxBytes = 26880; // 26.25 KB
-            
-            NSLog(@"Original image size: %.0fx%.0f, %lu bytes", image.size.width, image.size.height, (unsigned long)decodeData.length);
-          
-            // Resize image to max width using explicit scale to ensure consistency across iOS versions
-            // If original image width is smaller than 200, increase it to 200px
-            CGFloat scaleFactor;
-            if (image.size.width < maxWidth) {
-                scaleFactor = (CGFloat)maxWidth / image.size.width;
-            } else {
-                scaleFactor = MIN(1.0, (CGFloat)maxWidth / image.size.width);
+
+            CGFloat maxWidth = [width floatValue] / 2;
+
+            CGSize originalSize = image.size;
+            CGFloat scaleFactor = maxWidth / originalSize.width;
+            CGSize scaledSize = CGSizeMake(originalSize.width * scaleFactor, originalSize.height * scaleFactor);
+
+            if (originalSize.height > originalSize.width) {
+                CGFloat yOffset = (originalSize.height - originalSize.width) / 2.0;
+                CGRect cropRect = CGRectMake(0, yOffset, originalSize.width, originalSize.width);
+                CGImageRef croppedImageRef = CGImageCreateWithImageInRect([image CGImage], cropRect);
+                UIImage *croppedImage = [UIImage imageWithCGImage:croppedImageRef];
+                CGSize croppedSize = croppedImage.size;
+                CGImageRelease(croppedImageRef);
+                image = croppedImage;
+
+                scaledSize = CGSizeMake(croppedSize.width * scaleFactor, croppedSize.height * scaleFactor);
             }
-            CGSize scaledSize = CGSizeMake(image.size.width * scaleFactor, image.size.height * scaleFactor);
-            
-            // Use UIGraphicsImageRendererFormat with explicit scale to ensure consistency
-            UIGraphicsImageRendererFormat *format = [[UIGraphicsImageRendererFormat alloc] init];
-            format.scale = 1.0; // Force scale to 1.0 to prevent iOS version differences
-            format.opaque = NO;
-            
-            UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:scaledSize format:format];
-            UIImage *resizedImage = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
+
+            // Create a renderer with the calculated target size
+            UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:scaledSize];
+
+            // Render the image and get a new data representation
+            NSData *renderedImageData = [renderer JPEGDataWithCompressionQuality:1 actions:^(UIGraphicsImageRendererContext * _Nonnull context) {
                 [image drawInRect:CGRectMake(0, 0, scaledSize.width, scaledSize.height)];
             }];
-            
-            // Start with high quality and progressively reduce
-            CGFloat quality = 0.9;
-            NSData *processedData = UIImageJPEGRepresentation(resizedImage, quality);
-            
-            // Progressive quality reduction and height adjustment
-            while (processedData.length > maxBytes && quality > 0.3) {
-                quality -= 0.1;
-                processedData = UIImageJPEGRepresentation(resizedImage, quality);
-                
-                // If still too large and height > 100, reduce height by 10%
-                if (processedData.length > maxBytes && resizedImage.size.height > 100) {
-                    CGSize newSize = CGSizeMake(maxWidth, resizedImage.size.height * 0.9);
-                    UIGraphicsImageRenderer *heightRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:newSize format:format];
-                    resizedImage = [heightRenderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
-                        [resizedImage drawInRect:CGRectMake(0, 0, newSize.width, newSize.height)];
-                    }];
-                }
-            }
-            
-            UIImage *finalImage = [UIImage imageWithData:processedData];
-            [command addOriginrastBitImage:finalImage];
-            
-            NSLog(@"✅ Final image: %.0fx%.0f, %lu bytes, quality=%.1f", finalImage.size.width, finalImage.size.height, (unsigned long)processedData.length, quality);
+            UIImage *resizedImage = [UIImage imageWithData:renderedImageData];
+            [command addOriginrastBitImage:resizedImage];
         }
         
         if([linefeed isEqualToNumber:@1]){
