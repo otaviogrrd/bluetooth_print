@@ -92,13 +92,13 @@ public class PrintContent {
                         byte[] bytes = Base64.decode(content, Base64.DEFAULT);
                         Bitmap bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
 
-                        if(bitmap.getHeight() > bitmap.getWidth()){
-                              // Crop the image to maintain the aspect ratio and fit within the maximum height
-                              int startY = (bitmap.getHeight() - bitmap.getWidth()) / 2;
-                              bitmap = Bitmap.createBitmap(bitmap, 0, startY, bitmap.getWidth(), bitmap.getWidth());
+                        if(bitmap == null || bitmap.getWidth() <= 0 || bitmap.getHeight() <= 0){
+                              Log.e(TAG, "Invalid image content");
+                              continue;
                         }
-                        
-                        esc.addRastBitImage(bitmap, width, 0);
+
+                        int imageWidth = width > 0 ? width : bitmap.getWidth();
+                        esc.addRastBitImage(bitmap, imageWidth, 0);
                   }
 
                   if(linefeed == 1){
@@ -113,8 +113,11 @@ public class PrintContent {
 
             // 开钱箱
             // esc.addGeneratePlus(LabelCommand.FOOT.F2, (byte) 255, (byte) 255);
-            //开启切刀
-            esc.addCutPaper();
+            boolean cutPaper = Boolean.TRUE.equals(config.get("cutPaper"));
+            if(cutPaper){
+                  //开启切刀
+                  esc.addCutPaper();
+            }
             //添加缓冲区打印完成查询
             byte [] bytes={0x1D,0x72,0x01};
             //添加用户指令
