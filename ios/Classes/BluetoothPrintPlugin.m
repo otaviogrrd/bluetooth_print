@@ -218,8 +218,6 @@
     NSString *imageMode = ![config objectForKey:@"imageMode"] ? @"resizedPng" : [config objectForKey:@"imageMode"];
     NSNumber *initialFeedLines = ![config objectForKey:@"initialFeedLines"] ? @0 : [config objectForKey:@"initialFeedLines"];
     NSNumber *finalFeedLines = ![config objectForKey:@"finalFeedLines"] ? @0 : [config objectForKey:@"finalFeedLines"];
-    NSNumber *imageSliceHeight = ![config objectForKey:@"imageSliceHeight"] ? @192 : [config objectForKey:@"imageSliceHeight"];
-    NSNumber *imageSliceGapLines = ![config objectForKey:@"imageSliceGapLines"] ? @0 : [config objectForKey:@"imageSliceGapLines"];
     
     EscCommand *command = [[EscCommand alloc]init];
     [command addInitializePrinter];
@@ -280,6 +278,10 @@
             }
 
             CGFloat maxWidth = [width floatValue] > 0 ? [width floatValue] : image.size.width;
+            maxWidth = floor(maxWidth / 8.0) * 8.0;
+            if (maxWidth < 8) {
+                maxWidth = 8;
+            }
             UIImage *imageToPrint = image;
 
             if ([@"origin" isEqualToString:imageMode]) {
@@ -305,40 +307,11 @@
                 }
 
                 imageToPrint = [UIImage imageWithData:renderedImageData];
+                if (imageToPrint == nil || imageToPrint.size.width <= 0 || imageToPrint.size.height <= 0) {
+                    continue;
+                }
 
-                if ([imageMode hasPrefix:@"sliced"]) {
-                    CGImageRef imageRef = imageToPrint.CGImage;
-                    if (imageRef == nil) {
-                        continue;
-                    }
-
-                    size_t pixelWidth = CGImageGetWidth(imageRef);
-                    size_t pixelHeight = CGImageGetHeight(imageRef);
-                    int sliceHeight = [imageSliceHeight intValue] > 0 ? [imageSliceHeight intValue] : 192;
-                    int sliceGapLines = [imageSliceGapLines intValue] > 0 ? [imageSliceGapLines intValue] : 0;
-                    BOOL useWidthCommand = [imageMode hasSuffix:@"Width"];
-
-                    for (int y = 0; y < pixelHeight; y += sliceHeight) {
-                        int currentHeight = MIN(sliceHeight, (int)pixelHeight - y);
-                        CGRect sliceRect = CGRectMake(0, y, pixelWidth, currentHeight);
-                        CGImageRef sliceRef = CGImageCreateWithImageInRect(imageRef, sliceRect);
-                        if (sliceRef == nil) {
-                            continue;
-                        }
-
-                        UIImage *sliceImage = [UIImage imageWithCGImage:sliceRef scale:imageToPrint.scale orientation:imageToPrint.imageOrientation];
-                        if (useWidthCommand) {
-                            [command addOriginrastBitImage:sliceImage width:(int)maxWidth];
-                        } else {
-                            [command addOriginrastBitImage:sliceImage];
-                        }
-                        CGImageRelease(sliceRef);
-
-                        if (sliceGapLines > 0 && y + currentHeight < pixelHeight) {
-                            [command addPrintAndFeedLines:sliceGapLines];
-                        }
-                    }
-                } else if ([@"resizedJpegWidth" isEqualToString:imageMode] || [@"resizedPngWidth" isEqualToString:imageMode]) {
+                if ([@"resizedJpegWidth" isEqualToString:imageMode] || [@"resizedPngWidth" isEqualToString:imageMode]) {
                     [command addOriginrastBitImage:imageToPrint width:(int)maxWidth];
                 } else if ([@"printingArea" isEqualToString:imageMode]) {
                     [command addSetPrintingAreaWidth:(int)maxWidth];
