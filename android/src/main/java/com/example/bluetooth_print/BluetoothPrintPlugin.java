@@ -15,7 +15,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.util.Log;
 import androidx.annotation.RequiresApi;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -40,7 +39,9 @@ import java.util.Map;
  * @author thon
  */
 public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, MethodCallHandler, RequestPermissionsResultListener {
-  private static final String TAG = "BluetoothPrintPlugin";
+  private static final int STATE_DISCONNECTED = 0;
+  private static final int STATE_CONNECTED = 1;
+  private static final int STATE_CONNECTING = 2;
   private Object initializationLock = new Object();
   private Context context;
   private ThreadPool threadPool;
@@ -51,6 +52,8 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   private EventChannel stateChannel;
   private BluetoothManager mBluetoothManager;
   private BluetoothAdapter mBluetoothAdapter;
+  private EventSink stateSink;
+  private boolean receiverRegistered = false;
 
   private FlutterPluginBinding pluginBinding;
   private ActivityPluginBinding activityBinding;
@@ -113,7 +116,6 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
           final Activity activity,
           final ActivityPluginBinding activityBinding) {
     synchronized (initializationLock) {
-      Log.i(TAG, "setup");
       this.activity = activity;
       this.application = application;
       this.context = application;
@@ -129,7 +131,6 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   }
 
   private void tearDown() {
-    Log.i(TAG, "teardown");
     context = null;
     if (activityBinding != null) {
       activityBinding.removeRequestPermissionsResultListener(this);
@@ -255,8 +256,6 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
 
 
   private void startScan(MethodCall call, Result result) {
-    Log.d(TAG,"start scan ");
-
     try {
       startScan();
       result.success(null);
@@ -319,6 +318,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
       this.curMacAddress = address;
 
       disconnect();
+      sendState(STATE_CONNECTING);
 
       new DeviceConnFactoryManager.Build()
               //设置连接方式
@@ -338,7 +338,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
 
       result.success(true);
     } else {
-      result.error("******************* invalid_argument", "argument 'address' not found", null);
+      result.error("invalid_argument", "argument 'address' not found", null);
     }
 
   }
@@ -353,6 +353,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
       deviceConnFactoryManager.closePort();
       deviceConnFactoryManager.mPort = null;
     }
+    sendState(STATE_DISCONNECTED);
 
     return true;
   }
@@ -361,7 +362,9 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
     DeviceConnFactoryManager.closeAllPort();
     if (threadPool != null) {
       threadPool.stopThreadPool();
+      threadPool = null;
     }
+    sendState(STATE_DISCONNECTED);
 
     return true;
   }
@@ -369,7 +372,8 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
   private void printTest(Result result) {
     final DeviceConnFactoryManager deviceConnFactoryManager = DeviceConnFactoryManager.getDeviceConnFactoryManagers().get(curMacAddress);
     if (deviceConnFactoryManager == null || !deviceConnFactoryManager.getConnState()) {
-      result.error("not connect", "state not right", null);
+      result.error("not_connected", "Printer is not connected", null);
+      return;
     }
 
     threadPool = ThreadPool.getInstantiation();
@@ -419,13 +423,15 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
 
     final DeviceConnFactoryManager deviceConnFactoryManager = DeviceConnFactoryManager.getDeviceConnFactoryManagers().get(curMacAddress);
     if (deviceConnFactoryManager == null || !deviceConnFactoryManager.getConnState()) {
-      result.error("not connect", "state not right", null);
+      result.error("not_connected", "Printer is not connected", null);
+      return;
     }
 
     if (args != null && args.containsKey("config") && args.containsKey("data")) {
       final Map<String,Object> config = (Map<String,Object>)args.get("config");
       final List<Map<String,Object>> list = (List<Map<String,Object>>)args.get("data");
       if(list == null){
+        result.error("invalid_argument", "argument 'data' is invalid", null);
         return;
       }
 
@@ -446,7 +452,7 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
         }
       });
     }else{
-      result.error("please add config or data", "", null);
+      result.error("invalid_argument", "please add config or data", null);
     }
 
   }
@@ -472,41 +478,58 @@ public class BluetoothPrintPlugin implements FlutterPlugin, ActivityAware, Metho
 
 
   private final StreamHandler stateHandler = new StreamHandler() {
-    private EventSink sink;
-
     private final BroadcastReceiver mReceiver = new BroadcastReceiver() {
       @Override
       public void onReceive(Context context, Intent intent) {
         final String action = intent.getAction();
-        Log.d(TAG, "stateStreamHandler, current action: " + action);
-
         if (BluetoothAdapter.ACTION_STATE_CHANGED.equals(action)) {
           threadPool = null;
-          sink.success(intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, -1));
+          sendState(STATE_DISCONNECTED);
         } else if (BluetoothDevice.ACTION_ACL_CONNECTED.equals(action)) {
-          sink.success(1);
+          sendState(STATE_CONNECTED);
         } else if (BluetoothDevice.ACTION_ACL_DISCONNECTED.equals(action)) {
           threadPool = null;
-          sink.success(0);
+          sendState(STATE_DISCONNECTED);
         }
       }
     };
 
     @Override
     public void onListen(Object o, EventSink eventSink) {
-      sink = eventSink;
+      stateSink = eventSink;
       IntentFilter filter = new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED);
       filter.addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED);
       filter.addAction(BluetoothDevice.ACTION_ACL_CONNECTED);
       filter.addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED);
-      context.registerReceiver(mReceiver, filter);
+      if (context != null && !receiverRegistered) {
+        context.registerReceiver(mReceiver, filter);
+        receiverRegistered = true;
+      }
     }
 
     @Override
     public void onCancel(Object o) {
-      sink = null;
-      context.unregisterReceiver(mReceiver);
+      stateSink = null;
+      if (context != null && receiverRegistered) {
+        context.unregisterReceiver(mReceiver);
+        receiverRegistered = false;
+      }
     }
   };
+
+  private void sendState(final int state) {
+    if (stateSink == null || activity == null) {
+      return;
+    }
+    activity.runOnUiThread(
+            new Runnable() {
+              @Override
+              public void run() {
+                if (stateSink != null) {
+                  stateSink.success(state);
+                }
+              }
+            });
+  }
 
 }

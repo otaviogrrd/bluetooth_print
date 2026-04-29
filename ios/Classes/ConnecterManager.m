@@ -52,10 +52,8 @@ static dispatch_once_t once;
 -(void)initConnecter:(ConnectMethod)connectMethod {
     switch (connectMethod) {
         case BLUETOOTH:
-            NSLog(@"[BluetoothPrintDebug] init BLEConnecter singleton manager=%p oldBle=%p", self, _bleConnecter);
             _bleConnecter = [BLEConnecter new];
             _connecter = _bleConnecter;
-            NSLog(@"[BluetoothPrintDebug] init BLEConnecter newBle=%p", _bleConnecter);
             break;
         default:
             break;
@@ -112,11 +110,6 @@ static dispatch_once_t once;
     if (_connecter) {
         [_connecter close];
     }
-    // Keep the BLE connector instance alive after disconnect. Releasing it here
-    // allows CoreBluetooth internals/delegates to be recreated between calls,
-    // which makes iOS report a physical connection while Flutter receives a
-    // stale disconnect event from the previous lifecycle.
-    NSLog(@"[BluetoothPrintDebug] close kept BLEConnecter alive manager=%p ble=%p", self, _bleConnecter);
 }
 
 @end

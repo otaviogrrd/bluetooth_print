@@ -10,18 +10,12 @@
 @property(nonatomic, assign) int stateID;
 @property(nonatomic) NSMutableDictionary *scannedPeripherals;
 @property(nonatomic, strong) CBPeripheral *activePeripheral;
-@property(nonatomic, strong) NSMutableArray *debugLogs;
-@property(nonatomic, assign) NSInteger lastCentralState;
-@property(nonatomic, assign) NSUInteger instanceID;
-
-- (void)addDebugLog:(NSString *)event peripheral:(CBPeripheral *)peripheral details:(NSDictionary *)details;
 
 @end
 
 @implementation BluetoothPrintPlugin
 
 static BluetoothPrintPlugin *sharedBluetoothPrintPlugin;
-static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
 
 + (void)registerWithRegistrar:(NSObject<FlutterPluginRegistrar>*)registrar {
   FlutterMethodChannel* channel = [FlutterMethodChannel
@@ -38,10 +32,6 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
   if (instance.scannedPeripherals == nil) {
     instance.scannedPeripherals = [NSMutableDictionary new];
   }
-  if (instance.debugLogs == nil) {
-    instance.debugLogs = [NSMutableArray new];
-  }
-  instance.lastCentralState = -1;
     
   // STATE
   if (instance.stateStreamHandler == nil) {
@@ -50,37 +40,19 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
   [stateChannel setStreamHandler:instance.stateStreamHandler];
 
   [registrar addMethodCallDelegate:instance channel:channel];
-  [instance addDebugLog:@"pluginRegistered" peripheral:nil details:@{}];
 }
 
 - (instancetype)init {
   self = [super init];
   if (self) {
-    bluetoothPrintPluginInstanceCounter += 1;
-    _instanceID = bluetoothPrintPluginInstanceCounter;
-    _lastCentralState = -1;
-    _debugLogs = [NSMutableArray new];
     _scannedPeripherals = [NSMutableDictionary new];
   }
   return self;
 }
 
 - (void)handleMethodCall:(FlutterMethodCall*)call result:(FlutterResult)result {
-  NSLog(@"call method -> %@", call.method);
-  [self addDebugLog:[NSString stringWithFormat:@"method.%@", call.method] peripheral:self.activePeripheral details:@{}];
-    
   if ([@"state" isEqualToString:call.method]) {
     result([NSNumber numberWithInt:self.stateID]);
-  } else if ([@"getDebugLogs" isEqualToString:call.method]) {
-    @synchronized (self.debugLogs) {
-      result([self.debugLogs copy]);
-    }
-  } else if ([@"clearDebugLogs" isEqualToString:call.method]) {
-    @synchronized (self.debugLogs) {
-      [self.debugLogs removeAllObjects];
-    }
-    [self addDebugLog:@"logsCleared" peripheral:self.activePeripheral details:@{}];
-    result(nil);
   } else if([@"isAvailable" isEqualToString:call.method]) {
     
     result(@(YES));
@@ -92,31 +64,22 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
   } else if([@"isOn" isEqualToString:call.method]) {
     result(@(YES));
   } else if([@"startScan" isEqualToString:call.method]) {
-      NSLog(@"getDevices method -> %@", call.method);
-      [self addDebugLog:@"startScan" peripheral:self.activePeripheral details:@{
-        @"bleConnecterExists": @(Manager.bleConnecter != nil)
-      }];
       [self.scannedPeripherals removeAllObjects];
       
       if (Manager.bleConnecter == nil) {
           [Manager didUpdateState:^(NSInteger state) {
-              self.lastCentralState = state;
-              [self addDebugLog:@"centralManagerDidUpdateState" peripheral:self.activePeripheral details:@{
-                @"rawState": @(state)
-              }];
               switch (state) {
                   case CBCentralManagerStateUnsupported:
-                      NSLog(@"The platform/hardware doesn't support Bluetooth Low Energy.");
+                      NSLog(@"[BluetoothPrint] Bluetooth Low Energy is unsupported.");
                       break;
                   case CBCentralManagerStateUnauthorized:
-                      NSLog(@"The app is not authorized to use Bluetooth Low Energy.");
+                      NSLog(@"[BluetoothPrint] App is not authorized to use Bluetooth Low Energy.");
                       break;
                   case CBCentralManagerStatePoweredOff:
-                      NSLog(@"Bluetooth is currently powered off.");
+                      NSLog(@"[BluetoothPrint] Bluetooth is powered off.");
                       break;
                   case CBCentralManagerStatePoweredOn:
                       [self startScan];
-                      NSLog(@"Bluetooth power on");
                       break;
                   case CBCentralManagerStateUnknown:
                   default:
@@ -129,20 +92,13 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
       
     result(nil);
   } else if([@"stopScan" isEqualToString:call.method]) {
-    [self addDebugLog:@"stopScan" peripheral:self.activePeripheral details:@{}];
     [Manager stopScan];
     result(nil);
   } else if([@"connect" isEqualToString:call.method]) {
     NSDictionary *device = [call arguments];
     @try {
-      NSLog(@"connect device begin -> %@", [device objectForKey:@"name"]);
       CBPeripheral *peripheral = [_scannedPeripherals objectForKey:[device objectForKey:@"address"]];
       if (peripheral == nil) {
-        [self addDebugLog:@"connectPeripheralMissing" peripheral:nil details:@{
-          @"requestedAddress": [device objectForKey:@"address"] ?: @"",
-          @"requestedName": [device objectForKey:@"name"] ?: @"",
-          @"scannedCount": @([self.scannedPeripherals count])
-        }];
         result([FlutterError errorWithCode:@"PERIPHERAL_NOT_FOUND"
                                    message:@"Peripheral was not found in scanned peripherals."
                                    details:device]);
@@ -150,11 +106,6 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
       }
       self.activePeripheral = peripheral;
       peripheral.delegate = self;
-      [self addDebugLog:@"connectCalled" peripheral:peripheral details:@{
-        @"managerPointer": [NSString stringWithFormat:@"%p", Manager],
-        @"bleConnecterPointer": [NSString stringWithFormat:@"%p", Manager.bleConnecter],
-        @"pluginPointer": [NSString stringWithFormat:@"%p", self]
-      }];
         
       self.state = ^(ConnectState state) {
         [self updateConnectState:state];
@@ -163,21 +114,15 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
       
       result(nil);
     } @catch(FlutterError *e) {
-      [self addDebugLog:@"connectFlutterError" peripheral:self.activePeripheral details:@{
-        @"error": [e description] ?: @""
-      }];
       result(e);
     } @catch(NSException *exception) {
-      [self addDebugLog:@"connectException" peripheral:self.activePeripheral details:@{
-        @"error": exception.reason ?: @""
-      }];
+      NSLog(@"[BluetoothPrint] Connect exception: %@", exception.reason);
       result([FlutterError errorWithCode:@"CONNECT_EXCEPTION"
                                  message:exception.reason
                                  details:nil]);
     }
   } else if([@"disconnect" isEqualToString:call.method]) {
     @try {
-      [self addDebugLog:@"disconnectCalled" peripheral:self.activePeripheral details:@{}];
       [Manager close];
       result(nil);
     } @catch(FlutterError *e) {
@@ -193,9 +138,6 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
   } else if([@"printReceipt" isEqualToString:call.method]) {
        @try {
          NSDictionary *args = [call arguments];
-         [self addDebugLog:@"printReceipt" peripheral:self.activePeripheral details:@{
-           @"connectedState": @(self.stateID)
-         }];
          [Manager write:[self mapToEscCommand:args]];
          result(nil);
        } @catch(FlutterError *e) {
@@ -421,11 +363,6 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
 -(void)startScan {
     [Manager scanForPeripheralsWithServices:nil options:nil discover:^(CBPeripheral * _Nullable peripheral, NSDictionary<NSString *,id> * _Nullable advertisementData, NSNumber * _Nullable RSSI) {
         if (peripheral.name != nil) {
-            
-            NSLog(@"find device -> %@", peripheral.name);
-            [self addDebugLog:@"didDiscover" peripheral:peripheral details:@{
-              @"RSSI": RSSI ?: @0
-            }];
             [self.scannedPeripherals setObject:peripheral forKey:[[peripheral identifier] UUIDString]];
             
             NSDictionary *device = [NSDictionary dictionaryWithObjectsAndKeys:peripheral.identifier.UUIDString,@"address",peripheral.name,@"name",nil,@"type",nil];
@@ -438,126 +375,33 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
 -(void)updateConnectState:(ConnectState)state {
     dispatch_async(dispatch_get_main_queue(), ^{
         NSNumber *ret = @0;
-        NSString *eventName = @"connectStateUnknown";
         switch (state) {
             case CONNECT_STATE_CONNECTING:
-                NSLog(@"status -> %@", @"连接状态：连接中....");
-                eventName = @"connectStateConnecting";
                 ret = @2;
                 self.stateID = 2;
                 break;
             case CONNECT_STATE_CONNECTED:
-                NSLog(@"status -> %@", @"连接状态：连接成功");
-                eventName = @"didConnect";
                 ret = @1;
                 self.stateID = 1;
                 break;
             case CONNECT_STATE_FAILT:
-                NSLog(@"status -> %@", @"连接状态：连接失败");
-                eventName = @"didFailToConnect";
                 ret = @0;
                 break;
             case CONNECT_STATE_DISCONNECT:
-                NSLog(@"status -> %@", @"连接状态：断开连接");
-                eventName = @"didDisconnectPeripheral";
                 ret = @0;
                 self.stateID = -1;
                 break;
             default:
-                NSLog(@"status -> %@", @"连接状态：连接超时");
-                eventName = @"connectStateTimeout";
                 ret = @0;
                 self.stateID = -1;
                 break;
         }
-        [self addDebugLog:eventName peripheral:self.activePeripheral details:@{
-          @"stateValue": @(state),
-          @"flutterState": ret,
-          @"streamAttached": @(self.stateStreamHandler.sink != nil)
-        }];
         
          NSDictionary *dict = [NSDictionary dictionaryWithObjectsAndKeys:ret,@"id",nil];
         if(_stateStreamHandler.sink != nil) {
           self.stateStreamHandler.sink([dict objectForKey:@"id"]);
-        } else {
-          [self addDebugLog:@"stateDroppedNoEventSink" peripheral:self.activePeripheral details:@{
-            @"stateValue": @(state)
-          }];
         }
     });
-}
-
-- (void)addDebugLog:(NSString *)event peripheral:(CBPeripheral *)peripheral details:(NSDictionary *)details {
-    if (self.debugLogs == nil) {
-        self.debugLogs = [NSMutableArray new];
-    }
-    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-    entry[@"timestamp"] = [self isoTimestamp];
-    entry[@"event"] = event ?: @"";
-    entry[@"thread"] = [NSThread isMainThread] ? @"main" : [[NSThread currentThread] description];
-    entry[@"centralState"] = [self centralStateLabel:self.lastCentralState];
-    entry[@"centralStateValue"] = @(self.lastCentralState);
-    entry[@"pluginInstanceID"] = @(self.instanceID);
-    entry[@"pluginPointer"] = [NSString stringWithFormat:@"%p", self];
-    entry[@"managerPointer"] = [NSString stringWithFormat:@"%p", Manager];
-    entry[@"bleConnecterPointer"] = [NSString stringWithFormat:@"%p", Manager.bleConnecter];
-    entry[@"streamAttached"] = @(self.stateStreamHandler.sink != nil);
-    if (peripheral != nil) {
-        entry[@"peripheralUUID"] = peripheral.identifier.UUIDString ?: @"";
-        entry[@"peripheralName"] = peripheral.name ?: @"";
-        entry[@"peripheralState"] = [self peripheralStateLabel:peripheral.state];
-        entry[@"peripheralPointer"] = [NSString stringWithFormat:@"%p", peripheral];
-    }
-    if (details != nil && [details count] > 0) {
-        entry[@"details"] = details;
-    }
-    @synchronized (self.debugLogs) {
-        [self.debugLogs addObject:entry];
-        if ([self.debugLogs count] > 500) {
-            [self.debugLogs removeObjectAtIndex:0];
-        }
-    }
-    NSLog(@"[BluetoothPrintDebug] %@", entry);
-}
-
-- (NSString *)isoTimestamp {
-    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-    formatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-    formatter.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
-    formatter.dateFormat = @"yyyy-MM-dd'T'HH:mm:ss.SSS'Z'";
-    return [formatter stringFromDate:[NSDate date]];
-}
-
-- (NSString *)centralStateLabel:(NSInteger)state {
-    switch (state) {
-        case CBCentralManagerStateUnsupported:
-            return @"unsupported";
-        case CBCentralManagerStateUnauthorized:
-            return @"unauthorized";
-        case CBCentralManagerStatePoweredOff:
-            return @"poweredOff";
-        case CBCentralManagerStatePoweredOn:
-            return @"poweredOn";
-        case CBCentralManagerStateResetting:
-            return @"resetting";
-        case CBCentralManagerStateUnknown:
-            return @"unknown";
-        default:
-            return @"notInitialized";
-    }
-}
-
-- (NSString *)peripheralStateLabel:(CBPeripheralState)state {
-    switch (state) {
-        case CBPeripheralStateDisconnected:
-            return @"disconnected";
-        case CBPeripheralStateConnecting:
-            return @"connecting";
-        case CBPeripheralStateConnected:
-            return @"connected";
-        case CBPeripheralStateDisconnecting:
-            return @"disconnecting";
-    }
 }
 
 @end
@@ -566,14 +410,10 @@ static NSUInteger bluetoothPrintPluginInstanceCounter = 0;
 
 - (FlutterError*)onListenWithArguments:(id)arguments eventSink:(FlutterEventSink)eventSink {
   self.sink = eventSink;
-  NSLog(@"[BluetoothPrintDebug] stream onListen");
-  [sharedBluetoothPrintPlugin addDebugLog:@"streamOnListen" peripheral:sharedBluetoothPrintPlugin.activePeripheral details:@{}];
   return nil;
 }
 
 - (FlutterError*)onCancelWithArguments:(id)arguments {
-  NSLog(@"[BluetoothPrintDebug] stream onCancel");
-  [sharedBluetoothPrintPlugin addDebugLog:@"streamOnCancel" peripheral:sharedBluetoothPrintPlugin.activePeripheral details:@{}];
   self.sink = nil;
   return nil;
 }

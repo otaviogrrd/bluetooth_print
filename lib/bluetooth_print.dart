@@ -5,6 +5,28 @@ import 'package:rxdart/rxdart.dart';
 
 import 'bluetooth_print_model.dart';
 
+enum BluetoothPrintConnectionState {
+  disconnected,
+  connecting,
+  connected,
+  error,
+}
+
+class BluetoothPrintException implements Exception {
+  const BluetoothPrintException(this.code, this.message, [this.details]);
+
+  final String code;
+  final String message;
+  final Object? details;
+
+  factory BluetoothPrintException.fromPlatformException(PlatformException error) {
+    return BluetoothPrintException(error.code, error.message ?? 'Bluetooth operation failed.', error.details);
+  }
+
+  @override
+  String toString() => 'BluetoothPrintException($code): $message';
+}
+
 class BluetoothPrint {
   static const String NAMESPACE = 'bluetooth_print';
   static const int CONNECTED = 1;
@@ -23,15 +45,15 @@ class BluetoothPrint {
     });
   }
 
-  static BluetoothPrint _instance = new BluetoothPrint._();
+  static final BluetoothPrint _instance = BluetoothPrint._();
 
   static BluetoothPrint get instance => _instance;
 
-  Future<bool> get isAvailable async => await _channel.invokeMethod('isAvailable').then<bool>((d) => d);
+  Future<bool> get isAvailable async => _invoke<bool>('isAvailable').then((value) => value ?? false);
 
-  Future<bool> get isOn async => await _channel.invokeMethod('isOn').then<bool>((d) => d);
+  Future<bool> get isOn async => _invoke<bool>('isOn').then((value) => value ?? false);
 
-  Future<bool?> get isConnected async => await _channel.invokeMethod('isConnected');
+  Future<bool?> get isConnected async => _invoke<bool>('isConnected');
 
   BehaviorSubject<bool> _isScanning = BehaviorSubject.seeded(false);
 
@@ -46,9 +68,9 @@ class BluetoothPrint {
 
   /// Gets the current state of the Bluetooth module
   Stream<int> _buildStateStream() async* {
-    yield await _channel.invokeMethod('state').then((s) => s);
+    yield await _invoke<int>('state').then((s) => s ?? DISCONNECTED);
 
-    yield* _stateChannel.receiveBroadcastStream().map((s) => s);
+    yield* _stateChannel.receiveBroadcastStream().map((s) => s is int ? s : DISCONNECTED);
   }
 
   Stream<int> get state {
@@ -78,12 +100,11 @@ class BluetoothPrint {
     _scanResults.add(<BluetoothDevice>[]);
 
     try {
-      await _channel.invokeMethod('startScan');
+      await _invoke('startScan');
     } catch (e) {
-      print('Error starting scan.');
       _stopScanPill.add(null);
       _isScanning.add(false);
-      throw e;
+      rethrow;
     }
 
     yield* BluetoothPrint.instance._methodStream
@@ -120,24 +141,25 @@ class BluetoothPrint {
 
   /// Stops a scan for Bluetooth Low Energy devices
   Future stopScan() async {
-    await _channel.invokeMethod('stopScan');
+    await _invoke('stopScan');
     _stopScanPill.add(null);
     _isScanning.add(false);
   }
 
-  Future<dynamic> connect(BluetoothDevice device) => _channel.invokeMethod('connect', device.toJson());
-
-  Future<dynamic> disconnect() => _channel.invokeMethod('disconnect');
-
-  Future<dynamic> destroy() => _channel.invokeMethod('destroy');
-
-  Future<List<Map<String, dynamic>>> getDebugLogs() async {
-    final logs = await _channel.invokeMethod('getDebugLogs');
-    if (logs is! List) return <Map<String, dynamic>>[];
-    return logs.map((entry) => Map<String, dynamic>.from(entry as Map)).toList();
+  Future<void> init() async {
+    await isAvailable;
   }
 
-  Future<dynamic> clearDebugLogs() => _channel.invokeMethod('clearDebugLogs');
+  Future<dynamic> connect(BluetoothDevice device) => _invoke('connect', device.toJson());
+
+  Future<dynamic> disconnect() => _invoke('disconnect');
+
+  Future<dynamic> destroy() => _invoke('destroy');
+
+  Future<BluetoothPrintConnectionState> getConnectionState() async {
+    final connected = await isConnected ?? false;
+    return connected ? BluetoothPrintConnectionState.connected : BluetoothPrintConnectionState.disconnected;
+  }
 
   Future<dynamic> printReceipt(Map<String, dynamic> config, List<LineText> data) {
     Map<String, Object> args = Map();
@@ -146,8 +168,7 @@ class BluetoothPrint {
       return m.toJson();
     }).toList();
 
-    _channel.invokeMethod('printReceipt', args);
-    return Future.value(true);
+    return _invoke('printReceipt', args);
   }
 
   Future<dynamic> printLabel(Map<String, dynamic> config, List<LineText> data) {
@@ -157,33 +178,38 @@ class BluetoothPrint {
       return m.toJson();
     }).toList();
 
-    _channel.invokeMethod('printLabel', args);
-    return Future.value(true);
+    return _invoke('printLabel', args);
   }
 
-  Future<dynamic> printTest() => _channel.invokeMethod('printTest');
+  Future<dynamic> print(Map<String, dynamic> config, List<LineText> data) => printReceipt(config, data);
+
+  Future<dynamic> printTest() => _invoke('printTest');
 
   Future<bool> openCashDrawer({int m = 0, int t1 = 25, int t2 = 250}) async {
     try {
       if (Platform.isAndroid) {
-        await _channel.invokeMethod('openCashDrawer');
-        print('Open cash drawer command sent successfully on Android.');
+        await _invoke('openCashDrawer');
       } else if (Platform.isIOS) {
-        // Call the openCashDrawer method on iOS
-        await _channel.invokeMethod('openCashDrawer', {
-          'm': m, // Cash drawer pin number (commonly 0 or 1)
-          't1': t1, // High-level pulse time in milliseconds
-          't2': t2, // Low-level pulse time in milliseconds
+        await _invoke('openCashDrawer', {
+          'm': m,
+          't1': t1,
+          't2': t2,
         });
-        print('Open cash drawer command sent successfully on iOS.');
       } else {
-        print('Unsupported platform.');
         return false;
       }
       return true;
-    } on PlatformException catch (e) {
-      print("Failed to open cash drawer: '${e.message}'.");
-      return false;
+    } on BluetoothPrintException {
+      rethrow;
     }
   }
+
+  Future<T?> _invoke<T>(String method, [dynamic arguments]) async {
+    try {
+      return await _channel.invokeMethod<T>(method, arguments);
+    } on PlatformException catch (error) {
+      throw BluetoothPrintException.fromPlatformException(error);
+    }
+  }
+
 }
