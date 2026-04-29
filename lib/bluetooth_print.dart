@@ -9,6 +9,7 @@ class BluetoothPrint {
   static const String NAMESPACE = 'bluetooth_print';
   static const int CONNECTED = 1;
   static const int DISCONNECTED = 0;
+  static const int CONNECTING = 2;
 
   static const MethodChannel _channel = const MethodChannel('$NAMESPACE/methods');
   static const EventChannel _stateChannel = const EventChannel('$NAMESPACE/state');
@@ -41,12 +42,18 @@ class BluetoothPrint {
   Stream<List<BluetoothDevice>> get scanResults => _scanResults.stream;
 
   PublishSubject _stopScanPill = new PublishSubject();
+  Stream<int>? _stateStream;
 
   /// Gets the current state of the Bluetooth module
-  Stream<int> get state async* {
+  Stream<int> _buildStateStream() async* {
     yield await _channel.invokeMethod('state').then((s) => s);
 
     yield* _stateChannel.receiveBroadcastStream().map((s) => s);
+  }
+
+  Stream<int> get state {
+    _stateStream ??= _buildStateStream().asBroadcastStream();
+    return _stateStream!;
   }
 
   /// Starts a scan for Bluetooth Low Energy devices
@@ -123,6 +130,14 @@ class BluetoothPrint {
   Future<dynamic> disconnect() => _channel.invokeMethod('disconnect');
 
   Future<dynamic> destroy() => _channel.invokeMethod('destroy');
+
+  Future<List<Map<String, dynamic>>> getDebugLogs() async {
+    final logs = await _channel.invokeMethod('getDebugLogs');
+    if (logs is! List) return <Map<String, dynamic>>[];
+    return logs.map((entry) => Map<String, dynamic>.from(entry as Map)).toList();
+  }
+
+  Future<dynamic> clearDebugLogs() => _channel.invokeMethod('clearDebugLogs');
 
   Future<dynamic> printReceipt(Map<String, dynamic> config, List<LineText> data) {
     Map<String, Object> args = Map();

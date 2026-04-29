@@ -30,6 +30,10 @@ static dispatch_once_t once;
  *  @param discover 发现的设备
  */
 -(void)scanForPeripheralsWithServices:(nullable NSArray<CBUUID *> *)serviceUUIDs options:(nullable NSDictionary<NSString *, id> *)options discover:(void(^_Nullable)(CBPeripheral *_Nullable peripheral,NSDictionary<NSString *, id> *_Nullable advertisementData,NSNumber *_Nullable RSSI))discover{
+    if (_bleConnecter == nil) {
+        currentConnMethod = BLUETOOTH;
+        [self initConnecter:currentConnMethod];
+    }
     [_bleConnecter scanForPeripheralsWithServices:serviceUUIDs options:options discover:discover];
 }
 
@@ -48,8 +52,10 @@ static dispatch_once_t once;
 -(void)initConnecter:(ConnectMethod)connectMethod {
     switch (connectMethod) {
         case BLUETOOTH:
+            NSLog(@"[BluetoothPrintDebug] init BLEConnecter singleton manager=%p oldBle=%p", self, _bleConnecter);
             _bleConnecter = [BLEConnecter new];
             _connecter = _bleConnecter;
+            NSLog(@"[BluetoothPrintDebug] init BLEConnecter newBle=%p", _bleConnecter);
             break;
         default:
             break;
@@ -67,10 +73,18 @@ static dispatch_once_t once;
  *  连接
  */
 -(void)connectPeripheral:(CBPeripheral *)peripheral options:(nullable NSDictionary<NSString *,id> *)options timeout:(NSUInteger)timeout connectBlack:(void(^_Nullable)(ConnectState state)) connectState{
+    if (_bleConnecter == nil) {
+        currentConnMethod = BLUETOOTH;
+        [self initConnecter:currentConnMethod];
+    }
     [_bleConnecter connectPeripheral:peripheral options:options timeout:timeout connectBlack:connectState];
 }
 
 -(void)connectPeripheral:(CBPeripheral * _Nullable)peripheral options:(nullable NSDictionary<NSString *,id> *)options {
+    if (_bleConnecter == nil) {
+        currentConnMethod = BLUETOOTH;
+        [self initConnecter:currentConnMethod];
+    }
     [_bleConnecter connectPeripheral:peripheral options:options];
 }
 
@@ -98,11 +112,11 @@ static dispatch_once_t once;
     if (_connecter) {
         [_connecter close];
     }
-    switch (currentConnMethod) {
-        case BLUETOOTH:
-            _bleConnecter = nil;
-            break;
-    }
+    // Keep the BLE connector instance alive after disconnect. Releasing it here
+    // allows CoreBluetooth internals/delegates to be recreated between calls,
+    // which makes iOS report a physical connection while Flutter receives a
+    // stale disconnect event from the previous lifecycle.
+    NSLog(@"[BluetoothPrintDebug] close kept BLEConnecter alive manager=%p ble=%p", self, _bleConnecter);
 }
 
 @end

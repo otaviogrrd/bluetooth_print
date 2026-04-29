@@ -9,7 +9,7 @@
 @end
 
 @interface BluetoothPrintStreamHandler : NSObject<FlutterStreamHandler>
-@property FlutterEventSink sink;
+@property(nonatomic, copy) FlutterEventSink sink;
 @end
 
 typedef enum NSUInteger {
